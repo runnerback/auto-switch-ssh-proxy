@@ -1,0 +1,23 @@
+# /etc/surge-tunnel/networks.conf
+# 格式: gateway_pattern|mode|target
+#
+# gateway_pattern: 当前默认网关 IP,支持 bash glob
+#   192.168.123.1     精确匹配
+#   10.167.68.*       匹配 10.167.68 网段
+#   10.*              匹配整个 10.x 段
+#   *                 兜底 (放最后一行,匹配所有未列出的网络)
+#
+# mode | target:
+#   socat | host:port            LAN 直连转发 (Mac/路由器上的 Surge / Clash)
+#   ssh   | user@host:rport      autossh 隧道 (远端 :rport 是对端代理监听端口)
+#
+# 顺序敏感: 从上到下,第一条命中即生效。
+# 注意:   | 两边不要有空格,注释以 # 开头。
+
+192.168.123.1|socat|192.168.123.225:6152
+10.167.68.*|ssh|zhangjianbo@10.167.68.126:6152
+
+# === 示例:之后接入新环境,在这里追加一行 ===
+# 192.168.31.1|socat|192.168.31.50:7890       # 朋友家 Clash
+# 172.20.10.1|socat|172.20.10.2:7890          # iPhone 热点 + 笔记本代理
+# *|ssh|zhangjianbo@10.167.68.126:6152        # 兜底:陌生网络也尝试公司隧道
