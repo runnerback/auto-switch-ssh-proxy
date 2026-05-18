@@ -11,13 +11,21 @@
 #   socat | host:port            LAN 直连转发 (Mac/路由器上的 Surge / Clash)
 #   ssh   | user@host:rport      autossh 隧道 (远端 :rport 是对端代理监听端口)
 #
+# host 字段推荐用 mDNS 主机名 (xxx.local) 而非硬编码 IP:
+#   ✅ ssh|zhangjianbo@zhangjianbos-macbook-pro.local:6152
+#   ❌ ssh|zhangjianbo@10.167.68.126:6152
+#   原因: 办公网 DHCP 会重新分配 IP,IP 旧值可能被分给陌生机器,
+#         SSH 会因 host key 不匹配拒绝连接 (防中间人保护);
+#         mDNS 名跟着 Mac 主机走,IP 变化无感知,known_hosts 也不会错位。
+#         详见 ssh-tunnel-office-network-fix.md
+#
 # 顺序敏感: 从上到下,第一条命中即生效。
 # 注意:   | 两边不要有空格,注释以 # 开头。
 
 192.168.123.1|socat|192.168.123.225:6152
-10.167.68.*|ssh|zhangjianbo@10.167.68.126:6152
+10.167.68.*|ssh|zhangjianbo@zhangjianbos-macbook-pro.local:6152
 
 # === 示例:之后接入新环境,在这里追加一行 ===
-# 192.168.31.1|socat|192.168.31.50:7890       # 朋友家 Clash
-# 172.20.10.1|socat|172.20.10.2:7890          # iPhone 热点 + 笔记本代理
-# *|ssh|zhangjianbo@10.167.68.126:6152        # 兜底:陌生网络也尝试公司隧道
+# 192.168.31.1|socat|192.168.31.50:7890                          # 朋友家 Clash
+# 172.20.10.1|socat|172.20.10.2:7890                             # iPhone 热点 + 笔记本代理
+# *|ssh|zhangjianbo@zhangjianbos-macbook-pro.local:6152          # 兜底:陌生网络也尝试 mDNS 找 Mac

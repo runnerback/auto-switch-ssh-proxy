@@ -53,6 +53,12 @@ case "$mode" in
   ssh)
     host="${target%:*}"
     rport="${target##*:}"
+    # 等 host 可解析 (mDNS *.local 在 boot 后需几秒等 avahi 就绪)
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      getent hosts "$host" >/dev/null 2>&1 && break
+      logger -t surge-tunnel "waiting for $host to resolve ($i/10)"
+      sleep 1
+    done
     export AUTOSSH_GATETIME=0
     exec /usr/bin/autossh -M 0 \
         -o ServerAliveInterval=30 \
