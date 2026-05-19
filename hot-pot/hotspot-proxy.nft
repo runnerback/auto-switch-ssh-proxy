@@ -1,0 +1,57 @@
+#!/usr/sbin/nft -f
+# /etc/nftables.d/hotspot-proxy.nft
+#
+# 把热点（wlp0s20f3）上来的 TCP 流量透明劫持到 redsocks:12345
+# 同时阻塞 UDP 443 (QUIC) 强制 TCP TLS 回退
+#
+# 表用独立的 inet 表，不会和 NetworkManager 自动加的规则冲突
+
+# 先尝试删除旧表（避免重载报"已存在"）
+destroy table inet hotspot_proxy
+
+table inet hotspot_proxy {
+
+    # ──────────────────────────────────────────────────────────────
+    # NAT: PREROUTING — 把客户端 TCP 流量 REDIRECT 到 redsocks
+    # ──────────────────────────────────────────────────────────────
+    chain prerouting {
+        type nat hook prerouting priority dstnat - 5; policy accept;
+
+        # 只处理热点接口进来的流量
+        iifname != "wlp0s20f3" return
+
+        # 局域网内通信（含网关本身）— 不劫持
+        ip  daddr 10.42.0.0/24 return
+        ip6 daddr fe80::/10   return
+
+        # 目标是本机的服务（DNS via dnsmasq:53 等）— 不劫持
+        fib daddr type local return
+
+        # 其余 TCP 全部 REDIRECT 到 redsocks
+        meta l4proto tcp redirect to :12345
+    }
+
+    # ──────────────────────────────────────────────────────────────
+    # FILTER: INPUT — 把 redsocks:12345 锁定给热点客户端
+    # redsocks 监听 0.0.0.0:12345（REDIRECT 的目的），但不能让办公网其他主机
+    # 也连过来白嫖代理，所以只放行 wlp0s20f3 和 loopback
+    # ──────────────────────────────────────────────────────────────
+    chain input {
+        type filter hook input priority filter - 5; policy accept;
+        tcp dport 12345 iifname { "wlp0s20f3", "lo" } counter accept
+        tcp dport 12345 counter drop
+    }
+
+    # ──────────────────────────────────────────────────────────────
+    # FILTER: FORWARD — 阻塞 QUIC 让浏览器回退 TCP TLS
+    # ──────────────────────────────────────────────────────────────
+    chain forward {
+        type filter hook forward priority filter - 5; policy accept;
+
+        iifname "wlp0s20f3" udp dport 443 reject with icmpx type admin-prohibited
+        iifname "wlp0s20f3" udp dport 80  reject with icmpx type admin-prohibited
+
+        # 可选：阻塞所有未走代理的明文 HTTP（防止泄露）
+        # iifname "wlp0s20f3" tcp dport 80 reject
+    }
+}
