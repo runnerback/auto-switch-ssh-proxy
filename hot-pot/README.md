@@ -1,12 +1,12 @@
 # Proxy Hotspot (代理热点)
 
-> **版本**: v1.0
-> **更新时间**: 2026-05-19
-> **状态**: 设计文档 + 可执行脚本，**未部署**
+> **版本**: v1.3
+> **更新时间**: 2026-05-20
+> **状态**: 已部署运行
 
 让 Ubuntu 开一个 WiFi 热点，**所有接入设备的 TCP 流量透明转发到 `127.0.0.1:6152`**（即 [auto-switch-ssh-proxy](../README.md) 的 surge 隧道入口），最终走家里/办公 Mac 的 Surge 出口。
 
-手机/平板/其他笔记本 **连上就能用，无需在客户端配代理**。
+手机/平板/其他笔记本 **连上就能用，无需在客户端配代理**，并且**能正常翻墙**（详见 §1.1 为什么必须用 xray）。
 
 ---
 
@@ -14,7 +14,7 @@
 
 ```
 ┌─────────────┐
-│ 手机/平板    │  连 WiFi "ZhangProxy"
+│ 手机/平板    │  连 WiFi "JuGuang-13F-D"
 └──────┬──────┘
        │ TCP (HTTP / HTTPS / SSH …)
        ▼
@@ -24,10 +24,12 @@
 │       │                                                          │
 │       │ ① nft: prerouting REDIRECT tcp → :12345                  │
 │       ▼                                                          │
-│  redsocks (127.0.0.1:12345)                                      │
-│       │                                                          │
-│       │ ② 包装成 HTTP CONNECT host:port                          │
+│  xray dokodemo-door (0.0.0.0:12345, sniffing=on)                 │
+│       │  ② 从 TLS ClientHello 嗅探 SNI / HTTP Host               │
+│       │     用「域名」覆盖掉被污染的目标 IP                       │
 │       ▼                                                          │
+│  xray http outbound ── CONNECT 真实域名:port ──┐                 │
+│                                                ▼                 │
 │  127.0.0.1:6152 ──── 现有 surge-tunnel (autossh / socat)         │
 │                                                                  │
 └──────────┬──────────────────────────────────────────────────────┘
@@ -35,20 +37,28 @@
      家里/公司 Mac 的 Surge → 公网 (按 Mac 上的 Surge 规则分流)
 ```
 
-### 为什么需要 redsocks？
+### 1.1 为什么必须用 xray，而不是 redsocks？
 
-`127.0.0.1:6152` 是 HTTP 代理 —— 只接受 `CONNECT host:port HTTP/1.1` 这种握手报文。但被劫持的客户端 TCP 包是裸 TCP，没有 CONNECT 头部。`redsocks` 就是干这件事的：
-1. 接管 nft REDIRECT 过来的连接
-2. 从原始 socket 取出**原本要去的目标 IP:port**（`SO_ORIGINAL_DST`）
-3. 主动连 `127.0.0.1:6152`，发 `CONNECT 原目标 HTTP/1.1`
-4. 转换完成后双向 splice
+最初用 redsocks，结果**客户端只能上国内、上不了翻墙网**。根因是 **DNS 污染 + redsocks 只转发 IP**：
 
-### UDP 怎么办？
+1. 手机解析 `www.google.com` → 走办公室/国内 DNS → GFW 返回**污染 IP**（实测返回的是 Facebook 的 IP）
+2. 手机连这个污染 IP:443
+3. redsocks 是「IP 级」透明代理，只能从 `SO_ORIGINAL_DST` 拿到**IP**，拿不到域名
+4. redsocks 把 `CONNECT 污染IP:443` 发给 Surge
+5. Surge 老实连那个污染 IP → 证书不匹配 → 失败
+
+国内网站能通，是因为国内 DNS 不污染国内域名，IP 正确，Surge 直连成功。
+
+**xray 的解法**：`dokodemo-door` 入站开 `sniffing` —— 读 TLS ClientHello 里的 **SNI**（或 HTTP `Host` 头），拿到真实域名，**丢弃污染 IP**，把 `CONNECT 真实域名:443` 发给 Surge。Surge 用自己的干净 DNS 重新解析 → 正确出口。
+
+这样 DNS 污染**完全失效**，且 Surge 能套用全部域名规则。这是所有「透明网关翻墙」（OpenWrt 软路由等）的标准做法，redsocks 本身做不到 SNI 嗅探。
+
+### 1.2 UDP 怎么办？
 
 HTTP CONNECT 代理 **不支持 UDP**。所以方案是：
-- **DNS (UDP 53)**：让 NetworkManager 自带的 dnsmasq 处理。dnsmasq 用系统 resolver 直接解析 —— DNS 明文经有线 `enp8s0` 出去（不走代理）。不解析私有域名，所以"分流"问题 0 影响。
-- **QUIC (UDP 443/80)**：nft `reject`，让浏览器/App 回退到 TCP TLS。否则 Chrome/Instagram 会偷偷用 QUIC 绕过代理。
-- **其他 UDP**（WebRTC、游戏）：会被 NAT 直连出去，**不走代理**。这是 HTTP 代理的固有局限。如果在意，下一步换 WireGuard/v2ray 隧道。
+- **DNS (UDP 53)**：让 NetworkManager 自带的 dnsmasq 处理。客户端拿到的 IP 可能被污染，但**无所谓** —— xray 会用 SNI 嗅探纠正，污染 IP 用不上。
+- **QUIC (UDP 443/80)**：nft `reject`，让浏览器/App 回退到 TCP TLS。否则 Chrome 会用 QUIC 绕过代理（而且 QUIC 没 TCP，xray 透明入站也接不了）。
+- **其他 UDP**（WebRTC、游戏）：会被 NAT 直连出去，**不走代理**。这是 HTTP 代理的固有局限。
 
 ---
 
@@ -58,88 +68,96 @@ HTTP CONNECT 代理 **不支持 UDP**。所以方案是：
 
 | 路径 | 作用 |
 |---|---|
-| `/etc/redsocks.conf` | redsocks 主配置 |
+| `/usr/local/bin/xray` | xray 二进制 |
+| `/usr/local/etc/xray/config.json` | xray 配置（透明入站 + http 出站） |
+| `/etc/systemd/system/xray.service` | xray systemd unit |
 | `/etc/nftables.d/hotspot-proxy.nft` | 流量劫持规则 |
 | `/usr/local/bin/hotspot-up.sh` | 一键开 |
 | `/usr/local/bin/hotspot-down.sh` | 一键关 |
+| `/etc/systemd/system/surge-hotspot.service` | 开机自启 unit |
 | NM connection profile `ProxyHotspot` | 热点 SSID/密码/AP 配置 |
 
 项目目录:
 
 | 路径 | 作用 |
 |---|---|
-| `redsocks.conf.example` | redsocks 配置模板 |
+| `xray-config.json` | xray 配置模板 |
+| `xray.service` | xray systemd unit 源 |
 | `hotspot-proxy.nft` | nftables 规则模板 |
 | `hotspot-up.sh` | 一键开热点脚本源 |
 | `hotspot-down.sh` | 一键关热点脚本源 |
+| `surge-hotspot.service` | 开机自启 unit 源 |
 | `README.md` | 本文档 |
 
 ---
 
 ## 3. 一次性部署
 
-### 3.1 装依赖
+### 3.1 装 xray
+
+apt 仓库没有 xray，从 GitHub 下二进制：
 
 ```bash
-sudo apt update
-sudo apt install -y redsocks nftables
+TMP=$(mktemp -d); cd "$TMP"
+curl -fL -o xray.zip \
+  https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+unzip -oq xray.zip
+sudo install -m 0755 xray /usr/local/bin/xray
+sudo mkdir -p /usr/local/share/xray /usr/local/etc/xray
+sudo install -m 0644 geoip.dat geosite.dat /usr/local/share/xray/
+cd / && rm -rf "$TMP"
+xray version
 ```
 
-> 已经有 `nftables`（Ubuntu 26.04 默认），主要装的是 `redsocks`。
-
-### 3.2 配置 redsocks
+### 3.2 配置 xray
 
 ```bash
 cd ~/Projects/auto-switch-ssh-proxy/hot-pot
-sudo install -m 0644 redsocks.conf.example /etc/redsocks.conf
+sudo install -m 0644 xray-config.json /usr/local/etc/xray/config.json
+sudo install -m 0644 xray.service /etc/systemd/system/xray.service
+sudo systemctl daemon-reload
 
-# 检查 redsocks 是否能起来
-sudo systemctl restart redsocks
-sudo systemctl status redsocks --no-pager
-ss -tlnp | grep 12345     # 应能看到 redsocks 监听在 127.0.0.1:12345
+# 校验配置 + 启动
+xray run -test -config /usr/local/etc/xray/config.json
+sudo systemctl enable --now xray
+ss -tlnp | grep 12345     # 应看到 xray 监听 *:12345 (0.0.0.0)
 ```
 
-如果失败：`journalctl -u redsocks -n 30 --no-pager` 看日志。
+> ⚠️ xray 必须监听 `0.0.0.0`（配置里 `"listen": "0.0.0.0"`）。nft `redirect to :12345`
+> 会把目标 IP 改成入站接口的 IP (10.42.0.1)，只听 loopback 会收不到。
 
 ### 3.3 配置 nftables 劫持规则
 
 ```bash
 sudo mkdir -p /etc/nftables.d
 sudo install -m 0644 hotspot-proxy.nft /etc/nftables.d/hotspot-proxy.nft
-```
-
-让规则跟随系统启动加载（在主 `/etc/nftables.conf` 末尾追加 include）：
-
-```bash
 sudo bash -c 'grep -q hotspot-proxy /etc/nftables.conf || \
     echo "include \"/etc/nftables.d/hotspot-proxy.nft\"" >> /etc/nftables.conf'
 ```
 
-> ⚠️ 但**默认 hotspot-proxy 表无害**（没流量进 wlp0s20f3 时所有规则都 return）。也可以选择不开机加载，仅在 `hotspot-up.sh` 里临时 `nft -f` 加载。
-
-### 3.4 安装一键脚本
+### 3.4 安装脚本 + 开机自启
 
 ```bash
 sudo install -m 0755 hotspot-up.sh   /usr/local/bin/
 sudo install -m 0755 hotspot-down.sh /usr/local/bin/
+sudo install -m 0644 surge-hotspot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now surge-hotspot.service
 ```
 
-### 3.5 首次起热点
+### 3.5 起热点
+
+`surge-hotspot.service` 已 enable，开机自动起。手动起停：
 
 ```bash
-sudo /usr/local/bin/hotspot-up.sh
+sudo systemctl start  surge-hotspot
+sudo systemctl stop   surge-hotspot
 ```
 
-脚本会：
-1. 检查 surge-tunnel 在跑
-2. 启动 redsocks
-3. 加载 nft 规则
-4. 若 `ProxyHotspot` profile 不存在，自动创建（AP 模式、shared IP、WPA2-PSK）
-5. 启用热点
+`hotspot-up.sh` 会：① 等 surge-tunnel 在跑 → ② 启动 xray → ③ 加载 nft 规则 →
+④ 开 WiFi radio + 断开占用 WiFi 卡的 STA 连接 → ⑤ 起 `ProxyHotspot` 热点（首次自动创建）。
 
-成功后输出 SSID 和密码，手机连上即可。
-
-**改 SSID/密码**：直接编辑 `hotspot-up.sh` 顶部的 `HOTSPOT_SSID` / `HOTSPOT_PASS` 后重跑。或者：
+**改 SSID/密码**：编辑 `hotspot-up.sh` 顶部的 `HOTSPOT_SSID` / `HOTSPOT_PASS`，重装脚本后重启服务。或直接：
 
 ```bash
 nmcli connection modify ProxyHotspot 802-11-wireless.ssid "新SSID"
@@ -153,35 +171,48 @@ nmcli connection up ProxyHotspot
 
 ```bash
 # 1. 服务都在
-systemctl is-active surge-tunnel redsocks
+systemctl is-active surge-tunnel xray surge-hotspot
 nmcli -t -f NAME,STATE connection show --active | grep ProxyHotspot
 
-# 2. nft 表加载
+# 2. nft 表 + 计数
 sudo nft list table inet hotspot_proxy
 
-# 3. 热点接口起来了
+# 3. 热点接口
 ip addr show wlp0s20f3 | grep "inet 10.42"
 
-# 4. 手机连上后，看到客户端
-ip neigh show dev wlp0s20f3
+# 4. 看谁连上了
+sudo iw dev wlp0s20f3 station dump | grep Station
 
-# 5. 在客户端跑：访问 https://ipinfo.io —— 出口 IP 应该是 Mac 上 Surge 选的节点的 IP
-#    （不是你 Ubuntu 当前 enp8s0 的公网出口）
+# 5. 客户端访问 https://ipinfo.io —— 出口应是 Surge 节点 IP，且能打开 google
 ```
 
-### 抓包确认流量走代理
+### 验证 xray SNI 嗅探（核心功能）
 
-在 Ubuntu 上观察 `redsocks` 进出连接：
+模拟手机的情形：连一个被污染的 IP，但 TLS SNI 是真实域名，看 xray 能否纠正：
 
 ```bash
-sudo ss -tnp | grep redsocks
-# 应看到 LISTEN 0 ... 127.0.0.1:12345 的入连接 + 到 127.0.0.1:6152 的出连接
+# 临时把本机发往某污染 IP 的流量也 redirect 到 xray
+sudo nft -f - <<'EOF'
+table inet xray_test {
+    chain output {
+        type nat hook output priority dstnat - 5; policy accept;
+        meta l4proto tcp ip daddr 157.240.7.20 tcp dport 443 redirect to :12345
+    }
+}
+EOF
+
+# 连污染 IP 157.240.7.20（Facebook 的 IP），但 SNI=www.google.com
+curl -k -sI -m 15 --resolve www.google.com:443:157.240.7.20 https://www.google.com | head -3
+# 期望: HTTP/2 200 —— 说明 xray 嗅探出 google 域名并正确转发
+
+sudo nft destroy table inet xray_test     # 清理
 ```
 
-观察 6152 上去往 Mac 的连接：
+xray 日志能看到嗅探+转发的连接：
 
 ```bash
-sudo journalctl -u surge-tunnel -f       # 看到流量在动
+sudo journalctl -u xray -f
+# from 10.42.0.x:port accepted tcp:IP:443 [transparent >> proxy]
 ```
 
 ---
@@ -189,28 +220,27 @@ sudo journalctl -u surge-tunnel -f       # 看到流量在动
 ## 5. 日常使用
 
 ```bash
-# 开 / 关
-sudo hotspot-up.sh
-sudo hotspot-down.sh
+# 开 / 关 / 重启
+sudo systemctl start   surge-hotspot
+sudo systemctl stop    surge-hotspot
+sudo systemctl restart surge-hotspot
 
 # 看谁连上了热点
-ip neigh show dev wlp0s20f3
-# 或更友好：
 sudo iw dev wlp0s20f3 station dump | grep Station
+ip neigh show dev wlp0s20f3
 
 # 实时监控 nft 命中数
-watch -n 1 'sudo nft list table inet hotspot_proxy'
+watch -n 1 'sudo nft list table inet hotspot_proxy | grep counter'
 
-# 限速（可选，避免某客户端跑满）—— tc 见 §7
+# 实时看 xray 转发
+sudo journalctl -u xray -f
 ```
 
-### 改 SSID/密码/频段
+### 改频段
 
 ```bash
-# 5GHz（更快，但有些老设备不支持）
-nmcli connection modify ProxyHotspot 802-11-wireless.band a
-# 2.4GHz（兼容好）
-nmcli connection modify ProxyHotspot 802-11-wireless.band bg
+nmcli connection modify ProxyHotspot 802-11-wireless.band a    # 5GHz 更快
+nmcli connection modify ProxyHotspot 802-11-wireless.band bg   # 2.4GHz 兼容好
 nmcli connection up ProxyHotspot
 ```
 
@@ -221,68 +251,59 @@ nmcli connection up ProxyHotspot
 | 症状 | 排查 |
 |---|---|
 | 客户端连不上 WiFi | `journalctl -u NetworkManager -n 50`; 网卡可能不支持当前频段，换 `band bg` |
-| 连上 WiFi 没网 | 看 redsocks 是否在跑、surge-tunnel 是否健康 (`curl -x http://127.0.0.1:6152 -sI https://www.google.com`) |
-| 客户端能上 HTTP，不能上 HTTPS | nft 规则没生效 / redsocks 协议类型错 (应为 `http-connect`) |
+| 连上 WiFi 没网 | 看 xray / surge-tunnel 是否健康 (`curl -x http://127.0.0.1:6152 -sI https://www.google.com`) |
+| **只能上国内，翻墙网打不开** | xray sniffing 没生效。见 §6.4 |
 | 客户端慢得离谱 | Surge 节点慢，或 6152 隧道延迟高。`mtr` 看 Mac 上游 |
 | Chrome 还在用 QUIC 绕代理 | nft forward 链 reject UDP 443 没生效，`nft list ruleset \| grep 443` |
-| 手机 DNS 解析慢 | dnsmasq 上游可能在转圈，改用 `8.8.8.8`: `nmcli connection modify ProxyHotspot ipv4.dns 8.8.8.8` |
-| `Error: Connection activation failed: Connection 'ProxyHotspot' is not available on device wlp0s20f3` | 你的 WiFi 卡正在连别的 WiFi。先 `nmcli device disconnect wlp0s20f3` |
-| nft 报 `Error: Could not process rule: File exists` | 表已存在，先 `nft destroy table inet hotspot_proxy` |
+| `Connection 'ProxyHotspot' is not available on device wlp0s20f3` | WiFi 卡在连别的 WiFi。`nmcli device disconnect wlp0s20f3` |
+| nft 报 `File exists` | 表已存在，先 `nft destroy table inet hotspot_proxy` |
 
 ### 6.1 客户端连了热点但完全无网络
 
 ```bash
-# 1. 看热点接口的状态
 ip addr show wlp0s20f3       # 必须有 10.42.0.1
-ip route                     # 应看到 10.42.0.0/24 dev wlp0s20f3
-
-# 2. NetworkManager shared 模式起 dnsmasq + masquerade 了吗
-ps -ef | grep dnsmasq | grep -i nm
-sudo nft list ruleset | grep -i masq
-
-# 3. 客户端能 ping 网关吗
-# 在手机连 WiFi 后，用网络诊断 ping 10.42.0.1
+ps -ef | grep dnsmasq | grep -i nm        # NM shared 的 dnsmasq 在跑吗
+sudo nft list ruleset | grep -i masq      # masquerade 规则在吗
+# 手机连 WiFi 后 ping 10.42.0.1 —— 能 ping 通但不能上网 → 看 xray / nft
 ```
 
-如果客户端能 ping 10.42.0.1 但不能上网 → 大概率是 redsocks 没在跑 / nft 规则没生效。
-
-### 6.2 流量没经过 redsocks (走了 NAT 直连)
+### 6.2 流量没经过 xray (走了 NAT 直连)
 
 ```bash
-# 看 nft 计数
 sudo nft list table inet hotspot_proxy
-# prerouting 链每条规则后面有 packets / bytes 计数
-# 如果 'redirect to :12345' 那条计数一直 0 → 规则没匹配到
-
-# 常见原因:
-# a) iifname 写错了 (确认是 wlp0s20f3 不是 wlan0)
-# b) 优先级被其他表抢先 (dstnat - 5 已经比默认还前)
-# c) 客户端在拿网关之前的流量
+# prerouting 链 'redirect to :12345' 计数一直 0 → 规则没匹配到
+# 常见原因: iifname 写错 / 优先级被抢 / 客户端拿网关前的流量
 ```
 
-### 6.3 ⚠️ 流量 REDIRECT 进 nft 但客户端永远连不上 (redsocks bind 错地址)
+### 6.3 ⚠️ 流量 REDIRECT 进 nft 但客户端连不上 (监听地址错)
 
-**症状**: `meta l4proto tcp counter packets 1500+ redirect to :12345` 计数狂涨,
-但 `ss -tnp` 看不到对应的 ESTABLISHED 连接,手机显示"无法联网"。
+**症状**: `redirect to :12345` 计数狂涨，但 `ss -tnp` 看不到 ESTABLISHED 连接。
 
-**根因**: redsocks 默认配置写 `local_ip = 127.0.0.1`,
-但 nft `redirect to :12345` 会把目标 IP **改成入站接口的 IP** (即 `10.42.0.1`),
-**不是** loopback。客户端 SYN 到达 `10.42.0.1:12345` → 内核找不到 listener → RST。
+**根因**: nft `redirect to :12345` 把目标 IP 改成入站接口 IP (10.42.0.1)，
+不是 loopback。监听 `127.0.0.1:12345` 会收不到。
 
-**验证**:
+**修复**: xray 配置里 `"listen": "0.0.0.0"`（本仓库模板已是对的）。
+验证: `ss -tlnp | grep 12345` 应显示 `*:12345`。
+nft `chain input` 限制 :12345 仅 `wlp0s20f3 + lo`，防办公网白嫖。
+
+### 6.4 ⚠️ 只能上国内，翻墙网打不开 (xray sniffing 问题)
+
+**根因**: DNS 污染 + 代理只拿到 IP 没拿到域名。详见 §1.1。
+
+**检查**:
 ```bash
-# 看 redsocks 监听哪
-sudo ss -tlnp | grep redsocks
-# 如果显示 127.0.0.1:12345 → 错的
-# 应显示 0.0.0.0:12345 → 对
+# xray 配置里 sniffing 必须 enabled
+grep -A4 sniffing /usr/local/etc/xray/config.json
+# "enabled": true, "destOverride": ["http","tls"]
 
-# 反向测试: 从热点网关 IP 能不能连
-nc -vz 10.42.0.1 12345
-# refused → bind 错了
+# 用 §4 的 xray_test 方法验证嗅探是否生效
 ```
 
-**修复**: `local_ip = 0.0.0.0` (本仓库的 `redsocks.conf.example` 已经是对的)。
-为了避免办公网其他主机也连进来白嫖, nft 的 `chain input` 限制 `iifname { lo, wlp0s20f3 }`。
+**修复**: 确保 `xray-config.json` 的 inbound 里有：
+```json
+"sniffing": { "enabled": true, "destOverride": ["http", "tls"], "routeOnly": false }
+```
+`routeOnly` 必须 `false` —— true 只用域名做路由判断、实际连接仍用污染 IP。
 
 ---
 
@@ -290,57 +311,31 @@ nc -vz 10.42.0.1 12345
 
 ### 7.1 客户端限速
 
-避免某客户端跑满隧道带宽：
-
 ```bash
 sudo tc qdisc add dev wlp0s20f3 root tbf rate 20mbit burst 32kbit latency 50ms
-# 撤销:
-# sudo tc qdisc del dev wlp0s20f3 root
+sudo tc qdisc del dev wlp0s20f3 root     # 撤销
 ```
 
-### 7.2 开机自启 (推荐已部署)
+### 7.2 开机自启设计要点
 
-用 `surge-hotspot.service`：
-
-```bash
-sudo install -m 0644 surge-hotspot.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now surge-hotspot.service
-```
-
-⚠️ **关键设计点**: service 用 `Wants=surge-tunnel.service` 而**不是** `Requires=`。
+⚠️ `surge-hotspot.service` 用 `Wants=`（不是 `Requires=`）依赖 surge-tunnel / xray。
 否则 NM dispatcher 在热点 up 时重启 surge-tunnel，会通过 Requires 反向把
-surge-hotspot 也 TERM 掉，导致 ExecStart 半路阵亡。
+surge-hotspot 也 TERM 掉，ExecStart 半路阵亡。
 
-⚠️ **STA vs AP 冲突**: 同一张 WiFi 卡不能同时做客户端 (STA) 和热点 (AP)。
-脚本第 4 步会检查 wlp0s20f3 是否被别的 WiFi 连接占用，是的话先 `disconnect`
-再 up ProxyHotspot。否则会卡在「Geely-Group 自动重连 → AP 起不来」死循环。
-
-按需关闭 / 重启：
-
-```bash
-sudo systemctl stop surge-hotspot.service     # 关
-sudo systemctl restart surge-hotspot.service  # 改了配置后重启
-sudo systemctl disable surge-hotspot.service  # 不再开机自启
+⚠️ 同一张 WiFi 卡不能同时做 STA + AP。脚本第 4 步会断开占用 wlp0s20f3 的
+客户端连接，再起 AP。
 
 ### 7.3 配合 auto-switch-ssh-proxy 切网
 
 `surge-tunnel.service` 切后端时 `127.0.0.1:6152` 监听者会换（socat ↔ autossh）。
-**redsocks 连的是 `127.0.0.1:6152`，与具体后端解耦**，所以切网时只需重启 redsocks（可选）：
-
-```bash
-# 在 /etc/NetworkManager/dispatcher.d/60-surge-tunnel.sh 里加一行：
-/usr/bin/systemctl restart redsocks 2>/dev/null || true
-```
-
-实际上 redsocks 是惰性连接，新连接才用新后端，所以这一步可省。
+xray 连的是 `127.0.0.1:6152`，与具体后端解耦，新连接自动用新后端，无需干预。
 
 ### 7.4 客户端绕过本机 / 本网
 
-如果想让热点客户端访问 Ubuntu 自身或者 Ubuntu 局域网（10.167.68.0/23）不走代理：
+让热点客户端访问 Ubuntu 自身或局域网不走代理 —— 在 `hotspot-proxy.nft`
+的 prerouting 链 redirect 之前加：
 
 ```nft
-# 在 prerouting 链 redirect 之前加
 ip daddr 10.167.68.0/23 return
 ```
 
@@ -348,12 +343,11 @@ ip daddr 10.167.68.0/23 return
 
 ## 8. 安全注意事项
 
-1. **WPA2-PSK 密码**：默认脚本里是 `changeme123`，**部署前必改**。
-2. **SSID 不要广播敏感信息**（如 `Zhang-Office-Internal` 这种）。
-3. **redsocks 暴露面**：监听 `127.0.0.1:12345`，外部不可达 ✓
-4. **nft 表优先级**：`dstnat - 5` 比 NM 自动加的高，确保我们的 REDIRECT 先生效，但 NM 的 masquerade 还会兜底（这是好事 —— UDP DNS 和未被劫持的流量正常走 NAT）
-5. **不要在不可信网络下开热点**：热点客户端拿到的是 Surge 出口，等于免费给别人翻墙。最好用足够长的密码，或者只在自己设备临时开。
-6. **流量审计**：所有客户端的 HTTPS 在 Mac 上的 Surge 处可见连接元数据（域名/端口）。如果有隐私顾虑，知道这一层。
+1. **WPA2-PSK 密码**：当前 SSID `JuGuang-13F-D`，密码见 `hotspot-up.sh`。换密码见 §3.5。
+2. **xray :12345 暴露面**：监听 `0.0.0.0` 但 nft `input` 链只放行 `wlp0s20f3 + lo`，办公网其他主机连不进来。
+3. **nft 优先级**：`dstnat - 5` 比 NM 自动加的规则更前，确保 REDIRECT 先生效；NM masquerade 仍兜底未劫持的流量。
+4. **不要在不可信网络下开热点**：热点客户端拿到的是 Surge 出口，等于免费给别人翻墙。用足够长的密码。
+5. **流量审计**：所有客户端的 HTTPS 连接元数据（域名/端口）在 Mac 的 Surge 处可见。
 
 ---
 
@@ -363,4 +357,5 @@ ip daddr 10.167.68.0/23 return
 |---|---|---|
 | v1.0 | 2026-05-19 | 初版：设计文档 + 配置模板 + 一键脚本 |
 | v1.1 | 2026-05-19 | 实测部署修复：redsocks.conf 改 C 风格注释；hotspot-up.sh 加 STA 断开 + WiFi radio 自动开；surge-hotspot.service 用 Wants= 避免被 surge-tunnel 重启连坐 |
-| v1.2 | 2026-05-19 | **关键修复**：redsocks 必须 bind `0.0.0.0`（不能 `127.0.0.1`）—— nft REDIRECT 把目标 IP 改成入站接口 IP (10.42.0.1)，loopback 监听收不到。同步加 nft input 链限制 :12345 仅 wlp0s20f3+lo |
+| v1.2 | 2026-05-19 | 关键修复：透明代理必须 bind `0.0.0.0`（nft REDIRECT 改目标 IP 为入站接口 IP）；加 nft input 链限制 :12345 仅 wlp0s20f3+lo |
+| v1.3 | 2026-05-20 | **redsocks → xray**：redsocks 只转发 IP，遇 DNS 污染无法翻墙（只能上国内）。换 xray dokodemo-door + sniffing，从 TLS SNI 嗅探真实域名转给 Surge，DNS 污染失效 |

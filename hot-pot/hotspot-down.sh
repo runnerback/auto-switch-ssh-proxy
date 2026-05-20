@@ -15,7 +15,7 @@ nmcli connection down "$HOTSPOT_NAME" 2>/dev/null || true
 echo "[2/3] 卸 nft 表 ..."
 nft destroy table inet hotspot_proxy 2>/dev/null || true
 
-echo "[3/3] 停 redsocks ..."
-systemctl stop redsocks
+echo "[3/3] 停 xray ..."
+systemctl stop xray
 
 echo "✅ 已关闭"

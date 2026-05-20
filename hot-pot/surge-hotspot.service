@@ -1,8 +1,8 @@
 [Unit]
 Description=Proxy WiFi hotspot (routes client traffic through surge-tunnel)
 Documentation=file:///home/zhang/Projects/auto-switch-ssh-proxy/hot-pot/README.md
-Wants=surge-tunnel.service redsocks.service NetworkManager.service
-After=surge-tunnel.service redsocks.service NetworkManager.service network-online.target
+Wants=surge-tunnel.service xray.service NetworkManager.service
+After=surge-tunnel.service xray.service NetworkManager.service network-online.target
 Wants=network-online.target
 
 [Service]

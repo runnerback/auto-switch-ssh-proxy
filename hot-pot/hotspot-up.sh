@@ -31,14 +31,14 @@ if ! ss -tln | grep -q '127.0.0.1:6152'; then
 fi
 echo "  ✓ surge-tunnel OK"
 
-echo "[2/5] 启动 redsocks ..."
-systemctl enable --now redsocks
+echo "[2/5] 启动 xray (SNI 嗅探透明代理) ..."
+systemctl enable --now xray
 sleep 1
-if ! ss -tln | grep -q '127.0.0.1:12345'; then
-    echo "  ❌ redsocks:12345 没监听，看 journalctl -u redsocks -n 30" >&2
+if ! ss -tln | grep -q ':12345'; then
+    echo "  ❌ xray:12345 没监听，看 journalctl -u xray -n 30" >&2
     exit 1
 fi
-echo "  ✓ redsocks OK"
+echo "  ✓ xray OK"
 
 echo "[3/5] 加载 nftables 劫持规则 ..."
 nft -f /etc/nftables.d/hotspot-proxy.nft
