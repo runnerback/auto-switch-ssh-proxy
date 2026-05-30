@@ -1,11 +1,76 @@
 # Ubuntu 输入法方案 (fcitx5 + Rime)
 
-> **版本**: v1.0
-> **更新时间**: 2026-05-25
+> **版本**: v1.2
+> **更新时间**: 2026-05-30
 > **环境**: Ubuntu 26.04 + GNOME 50.1 (Wayland)
 > **结果**: 中英混输流畅、候选窗跟随光标、Rime 词库继承自原 ibus-rime
 
 记录从 Ubuntu 自带的 **iBus + Rime** 迁移到 **fcitx5 + Rime + 中英混输** 的完整方案,以及踩过的所有坑。
+
+---
+
+## ⭐ 推荐方案 (2026-05-30 新增) — Rime 用 **雾凇拼音 (rime-ice)** 替代 luna_pinyin_simp + easy_en
+
+§3 / §4 里描述的是经典方案 (`luna_pinyin_simp` + 手工挂 `easy_en` + 写 `custom.yaml`),可以工作但配置成本高、词库偏老。**雾凇拼音 (`iDvel/rime-ice`)** 是 Rime 社区近年最火的"开箱即用"配置包,**作为 Rime 方案的第一选择**:
+
+| 特性 | 经典方案 luna_pinyin_simp + easy_en (§4) | **雾凇拼音 rime-ice** |
+|---|---|---|
+| 中英混输 | 手工挂 easy_en 词典 + 写 patch | **内置**,开箱即用 |
+| **Emoji 输入** | ✗ 没有 | ✓ 输 `weixiao` `xiaoku` `daxiao` `aixin` `huo` 等直接出 emoji 候选 |
+| 智能识别 (邮箱 / URL / 大写) | 手写 recognizer patterns | **内置**几十条 |
+| 词库时效 | luna_pinyin 多年基本停更,新词偏少 | 基于现代语料,新词 / 流行语 / 网络用语齐全 |
+| 多方案支持 | 单方案 | 全拼 / 双拼 (小鹤 / 自然码 / 微软等 7 套) / 九键 / 五笔 / 三拼,一份配置全在 |
+| 部署成本 | 装词典 + 改 3-4 个 custom.yaml | **一行 plum 命令搞定** |
+| 维护状态 | luna_pinyin 上游基本停更 | iDvel/rime-ice 活跃维护 (周级别更新) |
+
+### 安装
+
+用 plum (Rime 官方包管理器) 一行装好,字典 / 方案 / Emoji / 脚本全套自动到位:
+
+```bash
+mkdir -p ~/.local/share/fcitx5/rime
+cd /tmp
+rm -rf plum
+git clone --depth 1 https://github.com/rime/plum.git
+cd plum
+rime_dir="$HOME/.local/share/fcitx5/rime" bash rime-install iDvel/rime-ice:others/recipes/full
+```
+
+> `:others/recipes/full` 装**完整方案** (全拼 + 所有双拼 + 九键 + 五笔 + Emoji 等约 70 个文件);若只要全拼,改 `iDvel/rime-ice:others/recipes/full-pinyin`,体积更小。
+
+装完后:
+
+1. 打开 fcitx5 配置工具 (`fcitx5-configtool`) 确认 Rime 已加入输入法
+2. `Ctrl+Space` 切到 Rime,按 **F4** 调出方案菜单 → 选 **「雾凇拼音」**
+3. 试输入: `weixiao` → 候选出 😊;`Python` → 直接英文上屏 (大写规则);`foo@bar.com` → 邮箱原样;`ni hao shi jie` → "你好世界"
+
+### Emoji 触发词速查 (常用)
+
+雾凇 emoji 是通过给拼音"加 emoji 候选"实现,无需切模式:
+
+| 输入 | Emoji | 输入 | Emoji |
+|---|---|---|---|
+| `weixiao` | 😊 微笑 | `aixin` | ❤️ 爱心 |
+| `xiaoku` | 😂 笑哭 | `huo` | 🔥 火 |
+| `daxiao` | 🤣 大笑 | `bizan` / `zan` | 👍 |
+| `daku` | 😭 大哭 | `ku` | 😎 酷 |
+| `xinsui` | 💔 心碎 | `tianshi` | 😇 天使 |
+| `kulian` | 😣 苦脸 | `bishi` | 😒 鄙视 |
+
+完整词库在装完后的 `~/.local/share/fcitx5/rime/cn_dicts/emoji.txt`。
+
+### 跟原 §3 / §4 的关系
+
+- **§3.1 ~ §3.7** (装 fcitx5、卸 ibus、设环境变量、输入法组、自启) **仍然必做** —— 雾凇拼音只替换 §3.9 词库迁移 + §4 Rime 自定义配置那两部分。
+- **§3.8 装 kimpanel GNOME 扩展** 仍然必做 —— 它跟选哪个 Rime 方案无关,是 **GNOME Wayland 下候选窗跟随光标的系统级方案**(替代 §8 的 Cursor XWayland 兜底)。
+- **§4 的 default.custom.yaml / luna_pinyin_simp.custom.yaml** 用雾凇后**可以不写** —— 雾凇内置都有;若已写好仍兼容 (Rime patch 叠加),不冲突。
+- **从 luna_pinyin_simp 升级到雾凇**:不用卸原方案,雾凇是独立 schema (`rime_ice`),可在 F4 菜单切换;但用户词频 (`luna_pinyin.userdb/`) **不会自动迁移**到雾凇 (词库格式不同),想保留输入习惯只能手写或重新积累。
+
+### 取舍
+
+- **新机器 / 第一次装 Rime** → 直接上雾凇,跳过 §4 整章。
+- **已有大量 luna_pinyin 深度自定义** (上百自定义短语 / 复杂 patch) → 看你愿不愿迁移;双方案并存也行,F4 切换即可。
+- **公司机器 / 写代码为主** → 雾凇内置的智能识别 (`Python` 走英文、URL/邮箱直通、Shift 切英文等) 是大杀器,基本零配置就有 IDE 友好的体验。
 
 ---
 
@@ -478,3 +543,4 @@ reboot
 |---|---|---|
 | v1.0 | 2026-05-25 | 初版:记录从 iBus → fcitx5 + Rime + easy_en + kimpanel 的完整方案、踩过的所有坑、还原方法 |
 | v1.1 | 2026-05-30 | 加 §8:Cursor / Chromium 候选框居中(没装 kimpanel 时的备用方案,XWayland 兜底);§7 故障排查表加索引指向 §8 |
+| v1.2 | 2026-05-30 | 开头加「⭐ 推荐方案」:Rime 方案的**第一选择**改为 **雾凇拼音 (rime-ice)**,替代 §4 的 luna_pinyin_simp + easy_en + 手写 custom.yaml 路线 —— 内置中英混输 / Emoji 输入 / 智能识别 / 多双拼方案,一行 plum 命令装好,词库活跃维护;含安装命令、Emoji 触发词速查、跟原 §3 / §4 的兼容关系说明 |
