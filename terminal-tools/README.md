@@ -210,7 +210,7 @@ xdg-terminal-exec true 2>&1 | head -2
 | `Ctrl+Shift+T` | 新建标签页 |
 | `Ctrl+Shift+W` | 关闭当前标签(无确认) |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 切换下一个 / 上一个标签 |
-| **`Ctrl+Shift+\|`** (即 Ctrl+Shift+\) | **左右分屏** |
+| **`Ctrl+Shift+d|`** (即 Ctrl+Shift+d) | **左右分屏** |
 | **`Ctrl+Shift+_`** (即 Ctrl+Shift+-) | **上下分屏** |
 | `Ctrl+Shift+方向键` | 切换相邻窗格 |
 | **`Alt+H/J/K/L`** | 调整窗格大小(vim 风格,每次 5 格) |

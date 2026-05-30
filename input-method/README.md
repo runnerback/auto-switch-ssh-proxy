@@ -323,7 +323,7 @@ pkill -x fcitx5 && setsid fcitx5 -d   # 重启 fcitx5,部署最干净
 |---|---|
 | 切到 Rime 但打字没反应 | fcitx5 没起 → `pgrep -x fcitx5`;没跑则 `setsid fcitx5 -d` |
 | 环境变量还是 ibus | iBus 没卸干净 (见 §3.2),或环境变量被 GNOME 覆盖。重启系统 |
-| 候选窗在屏幕中央 | kimpanel 扩展没启用 → `gnome-extensions info kimpanel@kde.org` 看 State,应为 ACTIVE |
+| 候选窗在屏幕中央 | kimpanel 扩展没启用 → `gnome-extensions info kimpanel@kde.org` 看 State,应为 ACTIVE。若**未装** kimpanel 且仅 Cursor/Chrome/VS Code 等 Chromium 应用居中,见 §8 |
 | 候选窗字体不对 | 改 kimpanel 的 `font` 设置,不是 fcitx5 (见 §3.8) |
 | 部分应用 (如 IDEA / Electron) 接不到输入 | 重启那个应用;Electron 应用要彻底退出后台进程 |
 | Rime 改了 custom.yaml 没生效 | 重新部署 → 重启 fcitx5,或托盘菜单 Deploy |
@@ -355,7 +355,83 @@ gnome-extensions info kimpanel@kde.org | grep State
 
 ---
 
-## 8. 一键还原回 iBus + Rime
+## 8. Cursor / Chromium 候选框居中（没装 kimpanel 时的备用方案）
+
+> **适用场景**: 本仓库 §3.8 推荐装 kimpanel 解决候选窗跟随,那是**系统级最优解**(GTK / Qt / Electron 都覆盖)。若由于某些原因不装 kimpanel(GNOME 版本不兼容、扩展无法安装、不想用 GNOME 扩展……),又只有 Cursor / VS Code / Chrome 这类 Chromium 应用候选框居中,用这个备用方案兜底,**仅修 Chromium 系**,其他应用维持原样。
+
+### 8.1 症状
+
+Cursor / VS Code / Chrome 等 Chromium / Electron 应用输入中文,候选词框固定屏幕中央,不跟随编辑光标。同机 Nautilus / Ptyxis / gedit 等 GTK 应用候选窗跟随正常 —— 即 fcitx5 没毛病,**仅 Chromium 家族异常**。
+
+`fcitx5-diagnose` 里能看到 GTK 应用进入 `Group [wayland:]` 的 InputContext 列表(`frontend:dbus`),但**找不到 Cursor**。
+
+### 8.2 根因
+
+GNOME 的 mutter 合成器**不支持** wlroots 风格的 `zwp_input_method_v2` 协议(只有 sway / Hyprland 实现)。Chromium 在 Wayland 下用 `--enable-wayland-ime` 尝试走这条路时握不上手,fallback 到完全不上报光标位置 —— fcitx5 只能把候选框放屏幕中央。mutter 的 `zwp_text_input_v3` → ibus 转发链路对外部 Chromium 客户端也实际不生效(gnome-shell 自己作为 ibus client 直连 fcitx5 是 OK 的,所以 gnome-shell 搜索栏输入中文跟随正常,但外部 wayland 客户端的 text-input 请求转发会丢)。
+
+kimpanel 之所以能绕开这堆问题,是因为它把候选词数据从 fcitx5 通过 D-Bus 转给 gnome-shell,由 gnome-shell 自己绘制 —— 完全绕过 wayland text-input 协议,自然也就没有 mutter 不支持的问题。
+
+### 8.3 修复(XWayland 兜底)
+
+让 Cursor 跑在 **XWayland** 下,由 fcitx5 的 X11 frontend 接管。fcitx5 X11 frontend 实现得不像传统 XIM 那么糟 —— 候选框位置由应用通过 X 协议上报,Chromium XWayland 上报正确。
+
+**操作**: 覆盖 system 的 `.desktop`,给 `Exec=` 加 `--ozone-platform=x11`。用户目录优先级高于 `/usr/share/applications`,apt 升级 Cursor 不会冲掉这份。
+
+```bash
+cp /usr/share/applications/cursor.desktop ~/.local/share/applications/cursor.desktop
+sed -i 's|Exec=/usr/share/cursor/cursor|Exec=/usr/share/cursor/cursor --ozone-platform=x11|g' \
+  ~/.local/share/applications/cursor.desktop
+update-desktop-database ~/.local/share/applications
+```
+
+VS Code / Chrome 同理,把对应 `.desktop` 文件搬到 `~/.local/share/applications/` 改 `Exec=` 即可。
+
+**重启 Cursor**(必须**完全退出进程**,关窗口不够;建议在 GNOME 自带终端里操作,避免把 Cursor 内嵌终端一起干掉):
+
+```bash
+pkill -f /usr/share/cursor/cursor
+sleep 2
+gtk-launch cursor
+```
+
+**验证**:
+
+```bash
+xlsclients | grep -i cursor       # 应能看到 cursor(之前 wayland-native 时看不到 → 现已走 XWayland)
+ps -eo cmd | grep cursor | grep -- --ozone-platform=x11
+```
+
+试输入中文,候选框应贴着光标了。
+
+### 8.4 已踩过的坑(别再试)
+
+| 试过的方案 | 为什么没用 |
+|---|---|
+| `--enable-wayland-ime --wayland-text-input-version=3` | 在 sway / Hyprland 上有效;GNOME mutter 不实现 `input-method-v2`,反而让 Cursor 完全不报光标 |
+| `--gtk-version=4` | Chromium 里这个 flag 只控制窗口装饰,不影响 IME 路径 |
+| `~/.config/cursor-flags.conf` | Cursor 的 `.desktop` 直接调 Electron binary,不经过会读 flags.conf 的 wrapper 脚本(VS Code 同样问题) |
+| 只写 `~/.config/environment.d/im-fcitx5.conf` 不卸 ibus | GNOME 自启的 ibus user service (`org.freedesktop.IBus.session.GNOME.service`) 会覆盖环境变量。要么按 §3.2 彻底卸 ibus,要么至少 `systemctl --user disable --now org.freedesktop.IBus.session.GNOME.service` |
+
+### 8.5 副作用
+
+- XWayland 下 HiDPI 缩放、触屏手势比 wayland-native 略差。
+- 仅 Chromium / Electron 应用需要这条;GTK4 应用(Nautilus 等)继续用 wayland-native。
+
+### 8.6 与 kimpanel 方案的取舍
+
+| 维度 | kimpanel (§3.8) | XWayland (本节) |
+|---|---|---|
+| 覆盖应用 | 全部(GTK / Qt / Electron / Java) | 仅 Chromium / Electron |
+| 候选窗绘制 | gnome-shell 内嵌绘制,样式跟系统主题 | 各应用自绘 / fcitx5 X11 frontend |
+| 部署成本 | 装 GNOME 扩展,要跟 gnome-shell 版本 | 改一个 `.desktop` 文件 |
+| 副作用 | 几乎无 | Chromium 退出 wayland-native,HiDPI 略差 |
+| 推荐度 | ★★★★★ 首选 | ★★★ 兜底 |
+
+新机器部署优先走 kimpanel;只有装不上 kimpanel 时才退到 XWayland。
+
+---
+
+## 9. 一键还原回 iBus + Rime
 
 如果想退回原方案:
 
@@ -396,8 +472,9 @@ reboot
 
 ---
 
-## 9. 变更记录
+## 10. 变更记录
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v1.0 | 2026-05-25 | 初版:记录从 iBus → fcitx5 + Rime + easy_en + kimpanel 的完整方案、踩过的所有坑、还原方法 |
+| v1.1 | 2026-05-30 | 加 §8:Cursor / Chromium 候选框居中(没装 kimpanel 时的备用方案,XWayland 兜底);§7 故障排查表加索引指向 §8 |
