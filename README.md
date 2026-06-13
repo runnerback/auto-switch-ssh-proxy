@@ -1,7 +1,7 @@
 # Auto-Switch SSH Proxy
 
-> **版本**: v2.0
-> **更新时间**: 2026-05-18
+> **版本**: v2.1
+> **更新时间**: 2026-06-13
 
 Ubuntu 上的自适应代理隧道。本机 `127.0.0.1:6152` 是上层应用统一入口,服务根据当前网络环境自动选择后端:
 
@@ -13,6 +13,22 @@ office  : autossh 隧道到 Mac (走 mDNS 名)    (跨子网穿透)
 ```
 
 NetworkManager 切网时自动重启服务,无需手工干预。
+
+---
+
+## 0. 姊妹文档 (本仓库的 Ubuntu 配置方案集)
+
+本仓库除了代理隧道,还沉淀了一批 **Ubuntu 26.04 + GNOME Wayland** 的环境配置方案,每个子目录一份自包含文档 (安装 / 配置 / 踩坑 / 还原):
+
+| 模块 | 文档 | 一句话 |
+|---|---|---|
+| 🌐 代理隧道 | 本文档 | 自适应 SSH/socat 隧道,`127.0.0.1:6152` 统一入口,切网自动重连 |
+| 🖥️ 远程 SSH | [`remote-ssh/`](remote-ssh/README.md) | Remote-SSH 工作流 + Ubuntu 笔记本 7×24 常开 |
+| 📡 代理热点 | [`hot-pot/`](hot-pot/README.md) | 把本机代理共享成 Wi-Fi 热点 |
+| 🔤 字体 | [`fonts/`](fonts/README.md) | JetBrains Mono / Sarasa / Maple Mono / Inter,系统+终端+Cursor 全套 |
+| ⌨️ 输入法 | [`input-method/`](input-method/README.md) | fcitx5 + Rime (雾凇拼音),GNOME Wayland 候选窗跟随光标 |
+| 🖲️ 终端工具 | [`terminal-tools/`](terminal-tools/README.md) | WezTerm nightly (NVIDIA Wayland) + 默认终端两套机制 |
+| 📸 截图工具 | [`screenshot-tools/`](screenshot-tools/README.md) | Flameshot (Ctrl+Alt+A) + 剪贴板截图传给 Claude Code |
 
 ---
 
@@ -254,3 +270,4 @@ journalctl -t surge-tunnel -n 5 --no-pager
 | v1.0 | 2026-05-16 | 初版: 配置驱动脚本 + NM 切网钩子 + bootstrap 流程 |
 | v1.1 | 2026-05-18 | 脚本加 mDNS 解析等待; 推荐用 mDNS 名取代 IP |
 | v2.0 | 2026-05-18 | **单文件重构**: 整合原 `proxy-auto-switch-execute.md` (bootstrap/部署) 和 `ssh-tunnel-office-network-fix.md` (host key 修复) 到本文档, 删除冗余 |
+| v2.1 | 2026-06-13 | 加 §0 姊妹文档索引: 把本仓库的 Ubuntu 配置方案集 (远程 SSH / 代理热点 / 字体 / 输入法 / 终端工具 / 截图工具) 汇总成入口表;新增 `screenshot-tools/` 模块 |
